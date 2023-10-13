@@ -518,10 +518,33 @@ public class NAOSDevice: NSObject {
 	}
 
 	/// Flash will upload the provided firmware to the device and reset the device when done.
-	public func flash(data: Data, progress: (NAOSProgress) -> Void) async throws {
+	public func flash(data: Data, progress: @escaping (NAOSProgress) -> Void) async throws {
 		// acquire mutex
 		await mutex.wait()
 		defer { mutex.signal() }
+		
+		// check characteristic
+		if peripheral.exists(char: .msg) {
+			// open session
+			if let session = try await NAOSSession.open(peripheral: peripheral, timeout: 5) {
+				// create endpoint
+				let endpoint = NAOSUpdateEndpoint(session: session)
+				
+				// get time
+				let start = Date()
+				
+				// run update
+				try await endpoint.run(image: data) { offset in
+					let diff = Date().timeIntervalSince(start)
+					progress(NAOSProgress(done: offset, total: data.count, rate: Double(offset) / diff, percent: 100 / Double(data.count) * Double(offset)))
+				}
+				
+				// end session
+				try await session.end(timeout: 5)
+				
+				return
+			}
+		}
 
 		// begin flash
 		try await peripheral.write(char: .flash, data: String(format: "b%d", data.count))
