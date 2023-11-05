@@ -22,12 +22,12 @@ public struct NAOSParamUpdate {
 /// The NAOS paramter endpoint.
 public class NAOSParamsEndpoint {
 	private let session: NAOSSession
-	private let timeout: TimeInterval
 	private let mutex = AsyncSemaphore(value: 1)
 	
-	public init(session: NAOSSession, timeout: TimeInterval) {
+	public let timeout: TimeInterval = 5
+	
+	public init(session: NAOSSession) {
 		self.session = session
-		self.timeout = timeout
 	}
 	
 	/// Get a parameter value by name.
@@ -172,15 +172,5 @@ public class NAOSParamsEndpoint {
 			// append info
 			list.append(NAOSParamUpdate(ref: ref, age: age, value: value))
 		}
-	}
-	
-	/// End the underlying session.
-	public func end() async throws {
-		// acquire mutex
-		await mutex.wait()
-		defer { mutex.signal() }
-		
-		// end session
-		try await session.end(timeout: timeout)
 	}
 }
