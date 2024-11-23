@@ -7,35 +7,11 @@ import Combine
 import Foundation
 import Semaphore
 
-/// The available parameter types.
-public enum NAOSType: UInt8 {
-	case raw
-	case string
-	case bool
-	case long
-	case double
-	case action
-}
-
-/// The available parameter modes.
-public struct NAOSMode: OptionSet {
-	public let rawValue: UInt8
-
-	public init(rawValue: UInt8) {
-		self.rawValue = rawValue
-	}
-
-	public static let volatile = NAOSMode(rawValue: 1 << 0)
-	public static let system = NAOSMode(rawValue: 1 << 1)
-	public static let application = NAOSMode(rawValue: 1 << 2)
-	public static let locked = NAOSMode(rawValue: 1 << 4)
-}
-
 /// The object representing a single NAOS parameter.
 public struct NAOSParameter: Hashable {
 	public var name: String
-	public var type: NAOSType
-	public var mode: NAOSMode
+	public var type: NAOSParamType
+	public var mode: NAOSParamMode
 	public var ref: UInt8 = 0
 
 	public func hash(into hasher: inout Hasher) {
@@ -86,21 +62,6 @@ public struct NAOSParameter: Hashable {
 			return String(format: "%.0f%% (App)", num * 100)
 		default:
 			return value
-		}
-	}
-}
-
-/// The NAOS specific errors.
-public enum NAOSError: LocalizedError {
-	case serviceNotFound
-	case characteristicNotFound
-
-	public var errorDescription: String? {
-		switch self {
-		case .serviceNotFound:
-			return "Device service not found."
-		case .characteristicNotFound:
-			return "Device characteristic not found."
 		}
 	}
 }
@@ -171,13 +132,11 @@ public class NAOSDevice: NSObject {
 
 				// use session
 				try? await withParamSession { session in
-					// create endpoint
-					let endpoint = NAOSParamsEndpoint(session: session)
-
 					// collect parameters
 					var updates: [NAOSParamUpdate] = []
 					do {
-						updates = try await endpoint.collect(refs: nil, since: maxAge)
+						updates = try await NAOSParams.collect(
+							session: session, refs: nil, since: maxAge)
 					} catch {
 						mutex.signal()
 						return
@@ -185,7 +144,8 @@ public class NAOSDevice: NSObject {
 
 					// update parameters
 					for update in updates {
-						if let param = (availableParameters.first { p in p.ref == update.ref }) {
+						if let param = (availableParameters.first { p in p.ref == update.ref })
+						{
 							parameters[param] = String(data: update.value, encoding: .utf8)!
 							maxAge = max(maxAge, update.age)
 						}
@@ -201,8 +161,13 @@ public class NAOSDevice: NSObject {
 					if let d = delegate {
 						for update in updates {
 							DispatchQueue.main.async {
-								if let param = (self.availableParameters.first { p in p.ref == update.ref }) {
-									d.naosDeviceDidUpdate(device: self, parameter: param)
+								if let param =
+									(self.availableParameters.first { p in
+										p.ref == update.ref
+									})
+								{
+									d.naosDeviceDidUpdate(
+										device: self, parameter: param)
 								}
 							}
 						}
@@ -268,11 +233,8 @@ public class NAOSDevice: NSObject {
 
 		// use session
 		try await withParamSession { session in
-			// create endpoint
-			let endpoint = NAOSParamsEndpoint(session: session)
-
 			// list parameters
-			let list = try await endpoint.list()
+			let list = try await NAOSParams.list(session: session)
 
 			// save parameters
 			availableParameters = []
@@ -287,7 +249,7 @@ public class NAOSDevice: NSObject {
 			let map = availableParameters.filter { p in p.type != .action }.map { p in p.ref }
 
 			// refresh parameters
-			for update in try await endpoint.collect(refs: map, since: 0) {
+			for update in try await NAOSParams.collect(session: session, refs: map, since: 0) {
 				if let param = availableParameters.first(where: { p in p.ref == update.ref }) {
 					parameters[param] = String(data: update.value, encoding: .utf8) ?? ""
 					maxAge = max(maxAge, update.age)
@@ -310,7 +272,7 @@ public class NAOSDevice: NSObject {
 		// acquire mutex
 		await mutex.wait()
 		defer { mutex.signal() }
-		
+
 		// save password
 		self.password = password
 
@@ -332,11 +294,8 @@ public class NAOSDevice: NSObject {
 
 		// use session
 		try await withParamSession { session in
-			// create endpoint
-			let endpoint = NAOSParamsEndpoint(session: session)
-
 			// read value
-			let value = try await endpoint.read(ref: parameter.ref)
+			let value = try await NAOSParams.read(session: session, ref: parameter.ref)
 
 			// write parameter
 			parameters[parameter] = String(data: value, encoding: String.Encoding.utf8)
@@ -361,11 +320,9 @@ public class NAOSDevice: NSObject {
 
 		// use session
 		try await withParamSession { session in
-			// create endpoint
-			let endpoint = NAOSParamsEndpoint(session: session)
-
 			// write parameter
-			try await endpoint.write(
+			try await NAOSParams.write(
+				session: session,
 				ref: parameter.ref,
 				value: parameters[parameter]!.data(using: .utf8)!
 			)
@@ -392,14 +349,11 @@ public class NAOSDevice: NSObject {
 		let session = try await session(timeout: 5)
 		defer { session.cleanup() }
 
-		// create endpoint
-		let endpoint = NAOSUpdateEndpoint(session: session)
-
 		// get time
 		let start = Date()
 
 		// run update
-		try await endpoint.run(image: data) { offset in
+		try await NAOSUpdate.run(session: session, image: data) { offset in
 			let diff = Date().timeIntervalSince(start)
 			progress(
 				NAOSProgress(
@@ -418,14 +372,14 @@ public class NAOSDevice: NSObject {
 	public func session(timeout: TimeInterval) async throws -> NAOSSession {
 		// open session
 		let session = try await NAOSSession.open(peripheral: peripheral, timeout: timeout)
-		
+
 		// try to unlock if locked
 		if !password.isEmpty {
 			if (try await session.status(timeout: 5)).contains(.locked) {
 				_ = try await session.unlock(password: password, timeout: 5)
 			}
 		}
-		
+
 		return session
 	}
 
