@@ -3,15 +3,14 @@
 //  Copyright © 2017 Joël Gähwiler. All rights reserved.
 //
 
-import Combine
 import Foundation
 import Semaphore
 
 /// The object representing a single NAOS parameter.
 public struct NAOSParameter: Hashable {
 	public var name: String
-	public var type: NAOSParamType
-	public var mode: NAOSParamMode
+	public var type: NAOSParamType = .raw
+	public var mode: NAOSParamMode = .init(rawValue: 0)
 	public var ref: UInt8 = 0
 
 	public func hash(into hasher: inout Hasher) {
@@ -19,19 +18,19 @@ public struct NAOSParameter: Hashable {
 	}
 
 	public static func == (lhs: NAOSParameter, rhs: NAOSParameter) -> Bool {
-		return lhs.name == rhs.name && lhs.type == rhs.type
+		return lhs.name == rhs.name
 	}
 
-	public static let deviceName = NAOSParameter(name: "device-name", type: .string, mode: .system)
-	public static let deviceType = NAOSParameter(name: "device-type", type: .string, mode: .system)
-	public static let connectionStatus = NAOSParameter(name: "connection-status", type: .string, mode: .system)
-	public static let battery = NAOSParameter(name: "battery", type: .double, mode: .system)
-	public static let uptime = NAOSParameter(name: "uptime", type: .long, mode: .system)
-	public static let freeHeap = NAOSParameter(name: "free-heap", type: .long, mode: .system)
-	public static let freeHeapInt = NAOSParameter(name: "free-heap-int", type: .long, mode: .system)
-	public static let wifiRSSI = NAOSParameter(name: "wifi-rssi", type: .long, mode: .system)
-	public static let cpuUsage0 = NAOSParameter(name: "cpu-usage0", type: .double, mode: .system)
-	public static let cpuUsage1 = NAOSParameter(name: "cpu-usage1", type: .double, mode: .system)
+	public static let deviceName = NAOSParameter(name: "device-name")
+	public static let deviceType = NAOSParameter(name: "device-type")
+	public static let connectionStatus = NAOSParameter(name: "connection-status")
+	public static let battery = NAOSParameter(name: "battery")
+	public static let uptime = NAOSParameter(name: "uptime")
+	public static let freeHeap = NAOSParameter(name: "free-heap")
+	public static let freeHeapInt = NAOSParameter(name: "free-heap-int")
+	public static let wifiRSSI = NAOSParameter(name: "wifi-rssi")
+	public static let cpuUsage0 = NAOSParameter(name: "cpu-usage0")
+	public static let cpuUsage1 = NAOSParameter(name: "cpu-usage1")
 
 	public func format(value: String) -> String {
 		let num = Double(value) ?? 0
@@ -66,42 +65,42 @@ public struct NAOSParameter: Hashable {
 	}
 }
 
-/// The NAOS update progress.
-public struct NAOSProgress {
-	public var done: Int
-	public var total: Int
-	public var rate: Double
-	public var percent: Double
-}
-
 /// The delegate implemented by objects
 public protocol NAOSManagedDeviceDelegate {
 	func naosDeviceDidUpdate(device: NAOSManagedDevice, parameter: NAOSParameter)
 	func naosDeviceDidDisconnect(device: NAOSManagedDevice, error: Error)
 }
 
-public class NAOSManagedDevice: NSObject {
-	private var manager: NAOSBLEManager
-	private var mutex = AsyncSemaphore(value: 1)
-	private var paramSession: NAOSSession?
-	private var refreshing: Bool = false
+public enum NAOSManagedError: LocalizedError {
+	case notConnected
 
-	var peripheral: NAOSBLEPeripheral
+	public var errorDescription: String? {
+		switch self {
+		case .notConnected:
+			return "Device not connected."
+		}
+	}
+}
+
+public class NAOSManagedDevice: NSObject {
+	private var mutex = AsyncSemaphore(value: 1)
+	private var session: NAOSSession?
+
+	var peripheral: NAOSBLEDevice
+	var channel: NAOSChannel? = nil
 	var updatable: Set<NAOSParameter> = Set()
 	var maxAge: UInt64 = 0
 
 	public var delegate: NAOSManagedDeviceDelegate?
 	public private(set) var connected: Bool = false
-	public private(set) var protected: Bool = false
 	public private(set) var locked: Bool = false
 	public private(set) var availableParameters: [NAOSParameter] = []
 	public var parameters: [NAOSParameter: String] = [:]
 	private var password: String = ""
 
-	init(peripheral: NAOSBLEPeripheral, manager: NAOSBLEManager) {
+	init(peripheral: NAOSBLEDevice) {
 		// initialize instance
 		self.peripheral = peripheral
-		self.manager = manager
 
 		// finish init
 		super.init()
@@ -119,8 +118,8 @@ public class NAOSManagedDevice: NSObject {
 				// acquire mutex
 				await mutex.wait()
 
-				// skip if not connected or refreshing
-				if !connected || refreshing {
+				// skip if not connected
+				if !connected {
 					// release mutex
 					mutex.signal()
 
@@ -128,12 +127,11 @@ public class NAOSManagedDevice: NSObject {
 				}
 
 				// use session
-				try? await withParamSession { session in
+				try? await withSession { session in
 					// collect parameters
 					var updates: [NAOSParamUpdate] = []
 					do {
-						updates = try await NAOSParams.collect(
-							session: session, refs: nil, since: maxAge)
+						updates = try await NAOSParams.collect(session: session, refs: nil, since: maxAge)
 					} catch {
 						mutex.signal()
 						return
@@ -141,8 +139,7 @@ public class NAOSManagedDevice: NSObject {
 
 					// update parameters
 					for update in updates {
-						if let param = (availableParameters.first { p in p.ref == update.ref })
-						{
+						if let param = (availableParameters.first { p in p.ref == update.ref }) {
 							parameters[param] = String(data: update.value, encoding: .utf8)!
 							maxAge = max(maxAge, update.age)
 						}
@@ -150,9 +147,6 @@ public class NAOSManagedDevice: NSObject {
 
 					// release mutex
 					mutex.signal()
-
-					// notify manager
-					manager.didUpdateDevice(device: self)
 
 					// call delegate if present
 					if let d = delegate {
@@ -180,20 +174,20 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
-		// connect
-		try await peripheral.connect()
+		// chceck state
+		if connected {
+			return
+		}
+
+		// open channel
+		channel = try await peripheral.open()
 
 		// set flag
 		connected = true
 
 		// read lock status
-		try await withParamSession { session in
+		try await withSession { session in
 			locked = try await session.status(timeout: 5).contains(.locked)
-		}
-
-		// save if this device is protected
-		if locked {
-			protected = true
 		}
 
 		// reset max aage
@@ -206,23 +200,13 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
-		// manage flag
-		refreshing = true
-		defer { refreshing = false }
-
-		// read lock status
-		try await withParamSession { session in
-			locked = try await session.status(timeout: 5).contains(.locked)
-		}
-
-		// save if this device is protected and stop
-		if locked {
-			protected = true
-			return
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
 		}
 
 		// use session
-		try await withParamSession { session in
+		try await withSession { session in
 			// list parameters
 			let list = try await NAOSParams.list(session: session)
 
@@ -246,9 +230,6 @@ public class NAOSManagedDevice: NSObject {
 				}
 			}
 		}
-
-		// notify manager
-		manager.didUpdateDevice(device: self)
 	}
 
 	/// Returns the title of the device.
@@ -263,11 +244,16 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
+		}
+
 		// save password
 		self.password = password
 
 		// read lock status
-		try await withParamSession { session in
+		try await withSession { session in
 			if try await session.unlock(password: password, timeout: 5) {
 				locked = false
 			}
@@ -282,17 +268,19 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
+		}
+
 		// use session
-		try await withParamSession { session in
+		try await withSession { session in
 			// read value
 			let value = try await NAOSParams.read(session: session, ref: parameter.ref)
 
 			// write parameter
 			parameters[parameter] = String(data: value, encoding: String.Encoding.utf8)
 		}
-
-		// notify manager
-		manager.didUpdateDevice(device: self)
 
 		// call delegate if present
 		if let d = delegate {
@@ -308,18 +296,19 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
+		}
+
 		// use session
-		try await withParamSession { session in
+		try await withSession { session in
 			// write parameter
 			try await NAOSParams.write(
 				session: session,
 				ref: parameter.ref,
-				value: parameters[parameter]!.data(using: .utf8)!
-			)
+				value: parameters[parameter]!.data(using: .utf8)!)
 		}
-
-		// notify manager
-		manager.didUpdateDevice(device: self)
 
 		// call delegate if present
 		if let d = delegate {
@@ -329,48 +318,34 @@ public class NAOSManagedDevice: NSObject {
 		}
 	}
 
-	/// Flash will upload the provided firmware to the device and reset the device when done.
-	public func flash(data: Data, progress: @escaping (NAOSProgress) -> Void) async throws {
+	/// NewSession will create a new session and return it.
+	public func newSession(timeout: TimeInterval) async throws -> NAOSSession {
 		// acquire mutex
 		await mutex.wait()
 		defer { mutex.signal() }
 
-		// open session
-		let session = try await session(timeout: 5)
-		defer { session.cleanup() }
-
-		// get time
-		let start = Date()
-
-		// run update
-		try await NAOSUpdate.run(session: session, image: data) { offset in
-			let diff = Date().timeIntervalSince(start)
-			progress(
-				NAOSProgress(
-					done: offset,
-					total: data.count,
-					rate: Double(offset) / diff,
-					percent: 100 / Double(data.count) * Double(offset)
-				))
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
 		}
 
-		// end session
-		try await session.end(timeout: 5)
+		// open new session
+		return try await openSession(timeout: timeout)
 	}
 
-	/// Session will create a new session and return it.
-	public func session(timeout: TimeInterval) async throws -> NAOSSession {
-		// open session
-		let session = try await NAOSSession.open(channel: peripheral.channel(), timeout: timeout)
+	/// UseSession will yield the managed session.
+	public func useSession(callback: (NAOSSession) async throws -> Void) async throws {
+		// acquire mutex
+		await mutex.wait()
+		defer { mutex.signal() }
 
-		// try to unlock if locked
-		if !password.isEmpty {
-			if (try await session.status(timeout: 5)).contains(.locked) {
-				_ = try await session.unlock(password: password, timeout: 5)
-			}
+		// check state
+		if !connected {
+			throw NAOSManagedError.notConnected
 		}
 
-		return session
+		// yield session
+		try await withSession(callback: callback)
 	}
 
 	/// Disconnect will close the connection to the device.
@@ -379,35 +354,51 @@ public class NAOSManagedDevice: NSObject {
 		await mutex.wait()
 		defer { mutex.signal() }
 
-		// clear session
-		paramSession = nil
-
-		// lock again if protected
-		if protected {
-			locked = true
+		// check state
+		if !connected {
+			return
 		}
+
+		// cleanup session
+		session?.cleanup()
+		session = nil
+
+		// close channel
+		channel?.close()
+		channel = nil
 
 		// set flag
 		connected = false
-
-		// disconnect from device
-		try await peripheral.disconnect()
 	}
 
 	// Helpers
 
-	private func withParamSession(callback: (NAOSSession) async throws -> Void) async throws {
+	private func openSession(timeout: TimeInterval) async throws -> NAOSSession {
+		// open session
+		let session = try await NAOSSession.open(channel: channel!, timeout: timeout)
+
+		// try to unlock if locked
+		if !password.isEmpty {
+			if try (await session.status(timeout: 5)).contains(.locked) {
+				_ = try await session.unlock(password: password, timeout: 5)
+			}
+		}
+
+		return session
+	}
+
+	private func withSession(callback: (NAOSSession) async throws -> Void) async throws {
 		// ensure session
-		if paramSession == nil {
-			paramSession = try await session(timeout: 5)
+		if session == nil {
+			session = try await openSession(timeout: 5)
 		}
 
 		// yield session
 		do {
-			try await callback(paramSession!)
+			try await callback(session!)
 		} catch {
-			paramSession?.cleanup()
-			paramSession = nil
+			session?.cleanup()
+			session = nil
 			throw error
 		}
 	}
@@ -420,13 +411,12 @@ public class NAOSManagedDevice: NSObject {
 		defer { mutex.signal() }
 
 		// clear session
-		paramSession?.cleanup()
-		paramSession = nil
-
-		// lock again if protected
-		if protected {
-			locked = true
-		}
+		session?.cleanup()
+		session = nil
+		
+		// close channel
+		channel?.close()
+		channel = nil
 
 		// set flag
 		connected = false
