@@ -5,8 +5,6 @@
 
 import Foundation
 
-let fsEndpoint: UInt8 = 0x3
-
 /// Information about a file.
 public struct NAOSFSInfo {
 	public var name: String
@@ -16,6 +14,9 @@ public struct NAOSFSInfo {
 
 /// The NAOS file system endpoint.
 public class NAOSFS {
+	/// The endpoint number.
+	public static let endpoint: UInt8 = 0x3
+	
 	/// Get information on a file or directory.
 	public static func stat(session: NAOSSession, path: String, timeout: TimeInterval = 5) async throws -> NAOSFSInfo {
 		// send command
@@ -156,15 +157,17 @@ public class NAOSFS {
 		// send "create" command
 		var cmd = pack(fmt: "oos", args: [UInt8(2), UInt8(1 << 0 | 1 << 2), file])
 		try await send(session: session, cmd: cmd, ack: true, timeout: timeout)
+		
+		// determine MTU
+		let mtu = session.channel.getMTU() - 6
+		print("MTU", mtu)
 
-		// TODO: Dynamically determine channel MTU?
-
-		// write data in 500-byte chunks
+		// write data in chunks
 		var num = 0
 		var offset = 0
 		while offset < data.count {
 			// determine chunk size and chunk data
-			let chunkSize = min(500, data.count - offset)
+			let chunkSize = min(mtu, data.count - offset)
 			let chunkData = data.subdata(in: offset ..< offset + chunkSize)
 
 			// determine mode
@@ -236,7 +239,7 @@ public class NAOSFS {
 
 	static func receive(session: NAOSSession, expectAck: Bool, timeout: TimeInterval) async throws -> Data? {
 		// receive reply
-		guard let data = try await session.receive(endpoint: fsEndpoint, expectAck: expectAck, timeout: timeout) else {
+		guard let data = try await session.receive(endpoint: self.endpoint, expectAck: expectAck, timeout: timeout) else {
 			return nil
 		}
 
@@ -250,6 +253,6 @@ public class NAOSFS {
 
 	static func send(session: NAOSSession, cmd: Data, ack: Bool, timeout: TimeInterval) async throws {
 		// send command
-		try await session.send(endpoint: fsEndpoint, data: cmd, ackTimeout: ack ? timeout : 0)
+		try await session.send(endpoint: self.endpoint, data: cmd, ackTimeout: ack ? timeout : 0)
 	}
 }
