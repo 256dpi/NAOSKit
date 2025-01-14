@@ -86,8 +86,8 @@ public class NAOSManagedDevice: NSObject {
 	private var mutex = AsyncSemaphore(value: 1)
 	private var session: NAOSSession?
 
-	var device: NAOSDevice
-	var channel: NAOSChannel? = nil
+	public private(set) var device: NAOSDevice
+	public private(set) var channel: NAOSChannel? = nil
 	var updatable: Set<NAOSParameter> = Set()
 	var maxAge: UInt64 = 0
 
@@ -102,6 +102,7 @@ public class NAOSManagedDevice: NSObject {
 	public var parameters: [NAOSParameter: String] = [:]
 	private var password: String = ""
 	public private(set) var relayDevices: [NAOSDevice] = []
+	public private(set) var mtu: UInt16 = 0
 
 	public init(device: NAOSDevice) {
 		// initialize instance
@@ -227,6 +228,9 @@ public class NAOSManagedDevice: NSObject {
 					NAOSRelayDevice(host: self, device: device)
 				}
 			}
+			
+			// get MTU
+			self.mtu = try await session.getMTU()
 		}
 	}
 
