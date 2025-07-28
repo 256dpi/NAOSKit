@@ -21,13 +21,13 @@ public struct NAOSParameter: Hashable {
 		return lhs.name == rhs.name
 	}
 
+	public static let deviceID = NAOSParameter(name: "device-id")
 	public static let deviceName = NAOSParameter(name: "device-name")
-	public static let deviceType = NAOSParameter(name: "device-type")
+	public static let appType = NAOSParameter(name: "app-name")
+	public static let appVersion = NAOSParameter(name: "app-version")
 	public static let connectionStatus = NAOSParameter(name: "connection-status")
 	public static let battery = NAOSParameter(name: "battery")
 	public static let uptime = NAOSParameter(name: "uptime")
-	public static let freeHeap = NAOSParameter(name: "free-heap")
-	public static let freeHeapInt = NAOSParameter(name: "free-heap-int")
 
 	public func format(value: String) -> String {
 		let num = Double(value) ?? 0
@@ -41,9 +41,6 @@ public struct NAOSParameter: Hashable {
 			formatter.allowedUnits = [.hour, .minute, .second]
 			formatter.unitsStyle = .abbreviated
 			return formatter.string(from: num / 1000) ?? ""
-		case .freeHeap, .freeHeapInt:
-			return ByteCountFormatter.string(
-				from: Measurement(value: num, unit: .bytes), countStyle: .memory)
 		default:
 			return value
 		}
@@ -98,7 +95,7 @@ public class NAOSManagedDevice: NSObject {
 
 		// initialize device name and type
 		parameters[.deviceName] = device.name()
-		parameters[.deviceType] = "unknown"
+		parameters[.appType] = "unknown"
 
 		// run updater
 		Task {
@@ -224,7 +221,7 @@ public class NAOSManagedDevice: NSObject {
 		// TODO: Precompute during refresh and updates?
 		
 		// format title
-		return (parameters[.deviceName] ?? "") + " (" + (parameters[.deviceType] ?? "") + ")"
+		return (parameters[.deviceName] ?? "") + " (" + (parameters[.appType] ?? "") + ")"
 	}
 
 	/// Unlock will attempt to unlock the device and returns its success.
