@@ -26,11 +26,11 @@ public class NAOSRelay {
 		}
 
 		// unpack reply
-		let raw = unpack(fmt: "q", data: reply)[0] as! UInt64
+		let raw = try unpack(fmt: "q", data: reply)[0] as! UInt64
 
 		// prepare map
 		var map = [UInt8]()
-		for i in 0 ... 64 {
+		for i in 0 ..< 64 {
 			if (raw & (1 << i)) != 0 {
 				map.append(UInt8(i))
 			}
@@ -89,54 +89,60 @@ public class NAOSRelayDevice: NAOSDevice {
 public class NAOSRelayChannel: NAOSChannel {
 	private var session: NAOSSession
 	private var device: UInt8
+	private let lock = NSLock()
 	private var queues: [NAOSQueue] = []
-	
+
 	public func width() -> Int {
 		return session.channel.width()
 	}
-	
+
 	public static func open(host: NAOSManagedDevice, device: UInt8) async throws -> NAOSRelayChannel {
 		// open session
 		let session = try await host.newSession()
-		
+
 		// link device
 		try await NAOSRelay.link(session: session, device: device)
-		
+
 		// create channel
 		return NAOSRelayChannel(session: session, device: device)
 	}
-	
+
 	init(session: NAOSSession, device: UInt8) {
 		// set state
 		self.session = session
 		self.device = device
-		
+
 		// run forwarder
-		Task {
-			while true {
+		Task { [weak self] in
+			while !Task.isCancelled {
+				guard let self else { break }
+
 				// receive message
 				let data = try? await NAOSRelay.receive(session: session, timeout: 1)
-				
+
 				// forward message, if present
 				if let data = data {
-					for queue in queues {
+					let targets = self.lock.withLock { self.queues }
+					for queue in targets {
 						queue.send(value: data)
 					}
 				}
 			}
 		}
 	}
-	
+
 	public func subscribe(queue: NAOSQueue) {
-		// add queue
-		if queues.first(where: { $0 === queue }) == nil {
-			queues.append(queue)
+		lock.withLock {
+			if queues.first(where: { $0 === queue }) == nil {
+				queues.append(queue)
+			}
 		}
 	}
 
 	public func unsubscribe(queue: NAOSQueue) {
-		// remove queue
-		queues.removeAll { $0 === queue }
+		lock.withLock {
+			queues.removeAll { $0 === queue }
+		}
 	}
 	
 	public func write(data: Data) async throws {

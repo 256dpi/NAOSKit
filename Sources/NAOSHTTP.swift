@@ -60,7 +60,10 @@ public class NAOSHTTPDevice: NAOSDevice {
 	public func open() async throws -> NAOSChannel {
 		// create task
 		let urlSession = URLSession(configuration: .default)
-		let webSocketTask = urlSession.webSocketTask(with: URL(string: "ws://" + host)!)
+		guard let url = URL(string: "ws://" + host) else {
+			throw URLError(.badURL)
+		}
+		let webSocketTask = urlSession.webSocketTask(with: url)
 
 		return await httpChannel.create(task: webSocketTask)
 	}
@@ -68,6 +71,7 @@ public class NAOSHTTPDevice: NAOSDevice {
 
 class httpChannel: NAOSChannel {
 	private var task: URLSessionWebSocketTask
+	private let lock = NSLock()
 	private var queues: [NAOSQueue] = []
 
 	public func width() -> Int {
@@ -82,21 +86,29 @@ class httpChannel: NAOSChannel {
 		let ch = httpChannel(task: task)
 
 		// run forwarder
-		Task {
+		Task { [weak ch] in
 			while true {
-				let msg = try await task.receive()
-				switch msg {
-				case .data(let data):
-					for queue in ch.queues {
-						queue.send(value: data)
+				guard let ch else { break }
+				do {
+					let msg = try await task.receive()
+					let targets = ch.lock.withLock { ch.queues }
+					switch msg {
+					case .data(let data):
+						for queue in targets {
+							queue.send(value: data)
+						}
+					case .string(let text):
+						if let data = text.data(using: .utf8) {
+							for queue in targets {
+								queue.send(value: data)
+							}
+						}
+					@unknown default:
+						break
 					}
-				case .string(let text):
-					let data = text.data(using: .utf8)!
-					for queue in ch.queues {
-						queue.send(value: data)
-					}
-				@unknown default:
-					fatalError("unhandled type")
+				} catch {
+					ch.close()
+					break
 				}
 			}
 		}
@@ -110,15 +122,17 @@ class httpChannel: NAOSChannel {
 	}
 
 	public func subscribe(queue: NAOSQueue) {
-		// add queue
-		if queues.first(where: { $0 === queue }) == nil {
-			queues.append(queue)
+		lock.withLock {
+			if queues.first(where: { $0 === queue }) == nil {
+				queues.append(queue)
+			}
 		}
 	}
 
 	public func unsubscribe(queue: NAOSQueue) {
-		// remove queue
-		queues.removeAll { $0 === queue }
+		lock.withLock {
+			queues.removeAll { $0 === queue }
+		}
 	}
 
 	public func write(data: Data) async throws {

@@ -15,7 +15,7 @@ public struct NAOSSessionStatus: OptionSet {
 	public static let locked = NAOSSessionStatus(rawValue: 1 << 0)
 }
 
-/// An session specific error..
+/// A session specific error.
 public enum NAOSSessionError: LocalizedError {
 	case unavailable
 	case timeout
@@ -46,7 +46,7 @@ public enum NAOSSessionError: LocalizedError {
 		case .closed:
 			return "Session has been closed."
 		case .expectedAck:
-			return "Expected acknowledgemnt."
+			return "Expected acknowledgement."
 		case .unexpectedAck:
 			return "Unexpected acknowledgement."
 		case .invalidMessage:
@@ -147,7 +147,7 @@ public class NAOSSession {
 		try await write(
 			msg: NAOSMessage(session: id, endpoint: endpoint, data: Data()))
 
-		// reaad reply
+		// read reply
 		let msg = try await read(timeout: timeout)
 
 		// verify message
@@ -224,7 +224,7 @@ public class NAOSSession {
 	/// Request the session status.
 	public func status(timeout: TimeInterval = 5) async throws -> NAOSSessionStatus {
 		// send command
-		try? await send(endpoint: 0xFD, data: Data([0]), ackTimeout: 0)
+		try await send(endpoint: 0xFD, data: Data([0]), ackTimeout: 0)
 
 		// await reply
 		let reply = try await receive(endpoint: 0xFD, expectAck: false, timeout: timeout)!
@@ -240,14 +240,14 @@ public class NAOSSession {
 		return status
 	}
 
-	/// Unlock  a locked session with the password.
+	/// Unlock a locked session with the password.
 	public func unlock(password: String, timeout: TimeInterval = 5) async throws -> Bool {
 		// prepare command
 		var cmd = Data([1])
 		cmd.append(password.data(using: .utf8)!)
 
 		// send command
-		try? await send(endpoint: 0xFD, data: cmd, ackTimeout: 0)
+		try await send(endpoint: 0xFD, data: cmd, ackTimeout: 0)
 
 		// await reply
 		let reply = try await receive(endpoint: 0xFD, expectAck: false, timeout: timeout)!
@@ -310,7 +310,7 @@ public class NAOSSession {
 		}
 	}
 
-	/// Clean  up the session.
+	/// Clean up the session.
 	public func cleanup() {
 		// end session in background
 		Task { try? await end(timeout: 0) }

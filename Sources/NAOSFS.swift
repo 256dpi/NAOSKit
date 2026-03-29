@@ -32,7 +32,7 @@ public class NAOSFS {
 		}
 
 		// unpack "info" reply
-		let args = unpack(fmt: "oi", data: reply, start: 1)
+		let args = try unpack(fmt: "oi", data: reply, start: 1)
 		let isDir = args[0] as! UInt8 == 1
 		let size = args[1] as! UInt32
 
@@ -60,7 +60,7 @@ public class NAOSFS {
 			}
 
 			// unpack "info" reply
-			let args = unpack(fmt: "ois", data: reply, start: 1)
+			let args = try unpack(fmt: "ois", data: reply, start: 1)
 			let isDir = args[0] as! UInt8 == 1
 			let size = args[1] as! UInt32
 			let name = args[2] as! String
@@ -125,7 +125,7 @@ public class NAOSFS {
 			}
 
 			// unpack offset
-			let args = unpack(fmt: "i", data: reply, start: 1)
+			let args = try unpack(fmt: "i", data: reply, start: 1)
 			let replyOffset = args[0] as! UInt32
 
 			// verify offset
@@ -210,14 +210,16 @@ public class NAOSFS {
 	public static func rename(session: NAOSSession, from: String, to: String, timeout: TimeInterval = 5) async throws {
 		// send command
 		let cmd = pack(fmt: "osos", args: [UInt8(6), from, UInt8(0), to])
-		try await send(session: session, cmd: cmd, ack: true, timeout: timeout)
+		try await send(session: session, cmd: cmd, ack: false, timeout: timeout)
+		_ = try await receive(session: session, expectAck: true, timeout: timeout)
 	}
 
 	/// Remove a file.
 	public static func remove(session: NAOSSession, path: String, timeout: TimeInterval = 5) async throws {
 		// send command
 		let cmd = pack(fmt: "os", args: [UInt8(7), path])
-		try await send(session: session, cmd: cmd, ack: true, timeout: timeout)
+		try await send(session: session, cmd: cmd, ack: false, timeout: timeout)
+		_ = try await receive(session: session, expectAck: true, timeout: timeout)
 	}
 
 	/// Calculate the SHA256 checksum of a file.
@@ -240,11 +242,12 @@ public class NAOSFS {
 		return sum
 	}
 	
-	/// Make a directory path..
+	/// Make a directory path.
 	public static func make(session: NAOSSession, path: String, timeout: TimeInterval = 5) async throws {
 		// send command
 		let cmd = pack(fmt: "os", args: [UInt8(9), path])
-		try await send(session: session, cmd: cmd, ack: true, timeout: timeout)
+		try await send(session: session, cmd: cmd, ack: false, timeout: timeout)
+		_ = try await receive(session: session, expectAck: true, timeout: timeout)
 	}
 
 	// - Helpers
@@ -257,7 +260,10 @@ public class NAOSFS {
 
 		// handle errors
 		if data[0] == 0 {
-			throw POSIXError(POSIXErrorCode(rawValue: Int32(data[1]))!)
+			if data.count < 2 {
+				throw NAOSSessionError.invalidMessage
+			}
+			throw POSIXError(POSIXErrorCode(rawValue: Int32(data[1])) ?? .EIO)
 		}
 
 		return data

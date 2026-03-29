@@ -93,7 +93,7 @@ public class NAOSParams {
 		try await session.send(endpoint: self.endpoint, data: cmd, ackTimeout: timeout)
 	}
 
-	/// Obtain a list of all known parametersession.
+	/// Obtain a list of all known parameters.
 	public static func list(session: NAOSSession, timeout: TimeInterval = 5) async throws -> [NAOSParamInfo] {
 		// send command
 		try await session.send(endpoint: self.endpoint, data: Data([2]), ackTimeout: 0)
@@ -117,9 +117,13 @@ public class NAOSParams {
 
 			// parse reply
 			let ref = reply[0]
-			let type = NAOSParamType(rawValue: reply[1])!
+			guard let type = NAOSParamType(rawValue: reply[1]) else {
+				throw NAOSSessionError.invalidMessage
+			}
 			let mode = NAOSParamMode(rawValue: reply[2])
-			let name = String(data: Data(reply[3...]), encoding: .utf8)!
+			guard let name = String(data: Data(reply[3...]), encoding: .utf8) else {
+				throw NAOSSessionError.invalidMessage
+			}
 
 			// append info
 			list.append(NAOSParamInfo(ref: ref, type: type, mode: mode, name: name))
@@ -185,7 +189,7 @@ public class NAOSParams {
 			}
 
 			// unpack reply
-			let args = unpack(fmt: "oqb", data: reply)
+			let args = try unpack(fmt: "oqb", data: reply)
 			let ref = args[0] as! UInt8
 			let age = args[1] as! UInt64
 			let value = args[2] as! Data

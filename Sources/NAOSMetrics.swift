@@ -61,12 +61,16 @@ public class NAOSMetrics {
 			}
 
 			// parse reply
-			let args = unpack(fmt: "oooos", data: reply)
+			let args = try unpack(fmt: "oooos", data: reply)
 
 			// parse reply
 			let ref = args[0] as! UInt8
-			let kind = NAOSMetricKind(rawValue: args[1] as! UInt8)!
-			let type = NAOSMetricType(rawValue: args[2] as! UInt8)!
+			guard let kind = NAOSMetricKind(rawValue: args[1] as! UInt8) else {
+				throw NAOSSessionError.invalidMessage
+			}
+			guard let type = NAOSMetricType(rawValue: args[2] as! UInt8) else {
+				throw NAOSSessionError.invalidMessage
+			}
 			let size = args[3] as! UInt8
 			let name = args[4] as! String
 
@@ -75,7 +79,7 @@ public class NAOSMetrics {
 		}
 	}
 
-	/// Describe a metric's keys and values,
+	/// Describe a metric's keys and values.
 	public static func describe(session: NAOSSession, ref: UInt8, timeout: TimeInterval = 5) async throws -> NAOSMetricLayout {
 		// send command
 		let cmd = Data([UInt8(1), ref])
@@ -107,7 +111,7 @@ public class NAOSMetrics {
 				}
 
 				// parse reply
-				let args = unpack(fmt: "os", data: reply, start: 1)
+				let args = try unpack(fmt: "os", data: reply, start: 1)
 
 				// parse reply
 				let num = args[0] as! UInt8
@@ -128,7 +132,7 @@ public class NAOSMetrics {
 				}
 
 				// parse reply
-				let args = unpack(fmt: "oos", data: reply, start: 1)
+				let args = try unpack(fmt: "oos", data: reply, start: 1)
 
 				// parse reply
 				let numKey = args[0] as! UInt8
@@ -145,7 +149,7 @@ public class NAOSMetrics {
 		}
 	}
 
-	/// Read metrics as  raw data.
+	/// Read metrics as raw data.
 	public static func read(session: NAOSSession, ref: UInt8, timeout: TimeInterval = 5) async throws -> Data {
 		// send command
 		let cmd = Data([2, ref])
@@ -157,7 +161,7 @@ public class NAOSMetrics {
 		return reply
 	}
 
-	/// Read metrics as  long data.
+	/// Read metrics as long data.
 	public static func readLong(session: NAOSSession, ref: UInt8, timeout: TimeInterval = 5) async throws -> [Int32] {
 		// receive value
 		let reply = try await read(session: session, ref: ref, timeout: timeout)
@@ -172,7 +176,7 @@ public class NAOSMetrics {
 		return list
 	}
 
-	/// Read metrics as  float data.
+	/// Read metrics as float data.
 	public static func readFloat(session: NAOSSession, ref: UInt8, timeout: TimeInterval = 5) async throws -> [Float] {
 		// receive value
 		let reply = try await read(session: session, ref: ref, timeout: timeout)
