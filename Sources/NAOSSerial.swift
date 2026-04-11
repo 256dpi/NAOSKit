@@ -22,8 +22,27 @@ public enum NAOSSerialError: LocalizedError {
 	}
 }
 
+/// A discovered serial device descriptor.
+public struct NAOSSerialDescriptor: Hashable, Sendable {
+	public let path: String
+	public let name: String
+
+	init(path: String) {
+		self.path = path
+		self.name = URL(fileURLWithPath: path).lastPathComponent
+	}
+
+	public func hash(into hasher: inout Hasher) {
+		hasher.combine(path)
+	}
+
+	public static func == (lhs: NAOSSerialDescriptor, rhs: NAOSSerialDescriptor) -> Bool {
+		lhs.path == rhs.path
+	}
+}
+
 /// List all known serial ports on Darwin based systems.
-public func NAOSSerialListPorts() -> [String] {
+public func NAOSSerialList() -> [NAOSSerialDescriptor] {
 	let devPath = "/dev"
 	guard let entries = try? FileManager.default.contentsOfDirectory(atPath: devPath) else {
 		return []
@@ -38,20 +57,17 @@ public func NAOSSerialListPorts() -> [String] {
 		return false
 	}.sorted(by: >)
 
-	return filtered.map { devPath + "/" + $0 }
+	return filtered.map { NAOSSerialDescriptor(path: devPath + "/" + $0) }
 }
 
-/// A serial NAOS device.
 public class NAOSSerialDevice: NAOSDevice {
 	private let path: String
-	private let displayName: String?
 	private let baudRate: Int
 	private let lock = NSLock()
 	private weak var channel: NAOSChannel?
 
-	public init(path: String, name: String? = nil, baudRate: Int = 115_200) {
+	public init(path: String, baudRate: Int = 115_200) {
 		self.path = path
-		self.displayName = name
 		self.baudRate = baudRate
 	}
 	
@@ -64,7 +80,7 @@ public class NAOSSerialDevice: NAOSDevice {
 	}
 
 	public func name() -> String {
-		return displayName ?? URL(fileURLWithPath: path).lastPathComponent
+		return URL(fileURLWithPath: path).lastPathComponent
 	}
 
 	public func open() async throws -> NAOSChannel {
@@ -73,7 +89,7 @@ public class NAOSSerialDevice: NAOSDevice {
 				throw NAOSSerialError.channelAlreadyOpen
 			}
 
-			let transport = try serialTransport(path: path, baudRate: baudRate)
+			let transport = try SerialTransport(path: path, baudRate: baudRate)
 			let ch = NAOSChannel(transport: transport, device: self, width: 1) { [weak self] in
 				self?.didClose()
 			}
@@ -90,27 +106,12 @@ public class NAOSSerialDevice: NAOSDevice {
 	}
 }
 
-private actor serialStreamReader {
-	private var iterator: AsyncThrowingStream<Data, Error>.Iterator
-
-	init(stream: AsyncThrowingStream<Data, Error>) {
-		self.iterator = stream.makeAsyncIterator()
-	}
-
-	func next() async throws -> Data? {
-		var iterator = self.iterator
-		let value = try await iterator.next()
-		self.iterator = iterator
-		return value
-	}
-}
-
-private final class serialTransport: NAOSTransport {
+private final class SerialTransport: NAOSTransport {
 	private let fd: Int32
 	private let readSource: DispatchSourceRead
 	private let writeQueue: DispatchQueue
 	private let streamContinuation: AsyncThrowingStream<Data, Error>.Continuation
-	private let reader: serialStreamReader
+	private let reader: StreamReader
 	private let stateLock = NSLock()
 	private var buffers = Data()
 	private var closed = false
@@ -139,7 +140,7 @@ private final class serialTransport: NAOSTransport {
 		var continuation: AsyncThrowingStream<Data, Error>.Continuation?
 		let stream = AsyncThrowingStream<Data, Error> { continuation = $0 }
 		self.streamContinuation = continuation!
-		self.reader = serialStreamReader(stream: stream)
+		self.reader = StreamReader(stream: stream)
 
 		readSource.setEventHandler { [weak self] in
 			self?.handleRead()
