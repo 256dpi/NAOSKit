@@ -35,8 +35,9 @@ public class NAOSFS {
 		let args = try unpack(fmt: "oi", data: reply, start: 1)
 		let isDir = args[0] as! UInt8 == 1
 		let size = args[1] as! UInt32
+		let name = URL(fileURLWithPath: path).lastPathComponent
 
-		return NAOSFSInfo(name: "", isDir: isDir, size: size)
+		return NAOSFSInfo(name: name, isDir: isDir, size: size)
 	}
 
 	/// List a files and directories.
@@ -271,6 +272,11 @@ public class NAOSFS {
 
 	static func send(session: NAOSSession, cmd: Data, ack: Bool, timeout: TimeInterval) async throws {
 		// send command
-		try await session.send(endpoint: self.endpoint, data: cmd, ackTimeout: ack ? timeout : 0)
+		try await session.send(endpoint: self.endpoint, data: cmd, ackTimeout: 0)
+
+		// await ack
+		if ack {
+			_ = try await receive(session: session, expectAck: true, timeout: timeout)
+		}
 	}
 }
